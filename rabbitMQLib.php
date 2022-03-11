@@ -1,6 +1,8 @@
 <?php
 
-require_once __DIR__ . "/config.php"; //pull in our credentials
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
 
 class rabbitMQConsumer {
   public $BROKER_HOST;
@@ -15,6 +17,8 @@ class rabbitMQConsumer {
   private $auto_delete = true;
 
   function __construct($exchange, $queue) {
+    require_once __DIR__ . "/config.php"; //pull in our credentials
+
     $this->BROKER_HOST = $config['host'];
     $this->BROKER_PORT = $config['port'];
     $this->USER = $config['username'];
@@ -81,8 +85,7 @@ class rabbitMQConsumer {
     echo "processed one-way message\n";
   }
 
-  function process_requests($callback)
-  {
+  function process_requests($callback) {
     try {
       $this->callback = $callback;
       $params = [];
@@ -129,6 +132,8 @@ class rabbitMQProducer {
   private $exchange_type = "topic";
 
   function __construct($exchange, $queue) {
+    require_once __DIR__ . "/config.php"; //pull in our credentials
+
     $this->BROKER_HOST = $config['host'];
     $this->BROKER_PORT = $config['port'];
     $this->USER = $config['username'];
@@ -195,7 +200,8 @@ class rabbitMQProducer {
       unset($this->response_queue[$uid]);
       return $response;
     } catch (Exception $e) {
-      die("failed to send message to exchange: " . $e->getMessage() . "\n");
+      fwrite(STDERR, "failed to send message to exchange: " . $e->getMessage() . "\n");
+      var_export($e);
     }
   }
 
@@ -219,7 +225,8 @@ class rabbitMQProducer {
       $this->conn_queue->bind($exchange->getName(), $this->routing_key);
       return $exchange->publish($json_message, $this->routing_key);
     } catch (Exception $e) {
-      die("failed to send message to exchange: " . $e->getMessage() . "\n");
+      fwrite(STDERR, "failed to send message to exchange: " . $e->getMessage() . "\n");
+      var_export($e);
     }
   }
 }
