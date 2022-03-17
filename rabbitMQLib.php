@@ -28,7 +28,7 @@ class rabbitMQConsumer {
       $this->exchange_type = $config["exchange_type"];
     }
     if (isset($config["auto_delete"])) {
-      $this->auto_delete = $config["exchange_type"];
+      $this->auto_delete = $config["auto_delete"];
     }
     $this->exchange = $exchange;
     $this->queue = $queue;
