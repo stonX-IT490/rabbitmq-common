@@ -14,7 +14,6 @@ class rabbitMQConsumer {
   private $queue;
   private $routing_key = '*';
   private $exchange_type = "topic";
-  private $auto_delete = true;
 
   function __construct($exchange, $queue) {
     require_once __DIR__ . "/config.php"; //pull in our credentials
@@ -26,9 +25,6 @@ class rabbitMQConsumer {
     $this->VHOST = $config['vhost'];
     if (isset($config["exchange_type"])) {
       $this->exchange_type = $config["exchange_type"];
-    }
-    if (isset($config["auto_delete"])) {
-      $this->auto_delete = $config["auto_delete"];
     }
     $this->exchange = $exchange;
     $this->queue = $queue;
@@ -132,7 +128,7 @@ class rabbitMQProducer {
   private $exchange_type = "topic";
 
   function __construct($exchange, $queue) {
-    require_once __DIR__ . "/config.php"; //pull in our credentials
+    require __DIR__ . "/config.php"; //pull in our credentials
 
     $this->BROKER_HOST = $config['host'];
     $this->BROKER_PORT = $config['port'];
@@ -163,7 +159,7 @@ class rabbitMQProducer {
   }
 
   function send_request($message) {
-    $uid = uniqid();
+    $uid = uniqid() . microtime(true);
 
     $json_message = json_encode($message);
     try {
@@ -194,14 +190,19 @@ class rabbitMQProducer {
 
       $exchange->publish($json_message, $this->routing_key, AMQP_NOPARAM, ['reply_to' => $callback_queue->getName(), 'correlation_id' => $uid]);
       $this->response_queue[$uid] = "waiting";
-      $callback_queue->consume([$this, 'process_response']);
+      try {
+        $callback_queue->consume([$this, 'process_response'], AMQP_NOWAIT);
+      } catch (Exception $e) {
+        unset($this->response_queue[$uid]);
+        $callback_queue->cancel($uid);
+        return [ 'error' => true, 'msg' => 'RMQ: Unable to consume response.' ];
+      }
 
       $response = $this->response_queue[$uid];
       unset($this->response_queue[$uid]);
       return $response;
     } catch (Exception $e) {
-      fwrite(STDERR, "failed to send message to exchange: " . $e->getMessage() . "\n");
-      var_export($e);
+      return [ 'error' => true, 'msg' => "Failed to send message to exchange: " . $e->getMessage() ];
     }
   }
 
@@ -225,8 +226,7 @@ class rabbitMQProducer {
       $this->conn_queue->bind($exchange->getName(), $this->routing_key);
       return $exchange->publish($json_message, $this->routing_key);
     } catch (Exception $e) {
-      fwrite(STDERR, "failed to send message to exchange: " . $e->getMessage() . "\n");
-      var_export($e);
+      die("failed to send message to exchange: " . $e->getMessage() . "\n");
     }
   }
 }
