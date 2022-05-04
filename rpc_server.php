@@ -18,6 +18,7 @@ $channel->queue_declare('rpc_queue', false, false, false, false);
 
 function fib($n)
 {
+    return $n."!";
     if ($n == 0) {
         return 0;
     }
