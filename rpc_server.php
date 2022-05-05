@@ -1,6 +1,5 @@
 <?php
 
-include('config.php');
 require_once __DIR__ . '/vendor/autoload.php';
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
@@ -25,6 +24,7 @@ class rabbitMQConsumer
 	//Initialize the consumer
 	public function __construct($exchange, $queue)
 	{
+		require_once __DIR__ . "/config.php"; //pull in our credentials
 		$this->host = $config['host'];
 		$this->port = $config['port'];
 		$this->username = $config['username'];
@@ -66,8 +66,8 @@ class rabbitMQConsumer
 	
 	public function process_requests($callback)
 	{
-
-		$this->connection = new AMQPStreamConnection($host, $port, $username, $password, $vhost);
+		$this->callback = $callback;
+		$this->connection = new AMQPStreamConnection($this->host, $this->port, $this->username, $this->password, $this->vhost);
 		$this->channel = $this->connection->channel();
 
 		$this->channel->queue_declare($this->queue, false, false, false, false);
