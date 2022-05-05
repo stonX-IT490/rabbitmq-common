@@ -5,54 +5,86 @@ require_once __DIR__ . '/vendor/autoload.php';
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
-$host = $config['host'];
-$port = $config['port'];
-$username = $config['username'];
-$password = $config['password'];
-$vhost = $config['vhost'];
-
-$connection = new AMQPStreamConnection($host, $port, $username, $password, $vhost);
-$channel = $connection->channel();
-
-$channel->queue_declare('rpc_queue', false, false, false, false);
-
 function fib($n)
 {
-    return $n."!";
-    if ($n == 0) {
-        return 0;
-    }
-    if ($n == 1) {
-        return 1;
-    }
-    return fib($n-1) + fib($n-2);
+	return $n."!";
 }
 
-echo " [x] Awaiting RPC requests\n";
-$callback = function ($req) {
-    $n = intval($req->body);
-    echo ' [.] fib(', $n, ")\n";
+class rabbitMQConsumer
+{
+	public $host;
+	private $port;
+	private $username;
+	private $password;
+	private $vhost;
+	private $exchange;
+	private $queue;
+	private $routing_key = '*';
+	private $exchange_type = "direct";
+	
+	//Initialize the consumer
+	public function __construct($exchange, $queue)
+	{
+		$this->host = $config['host'];
+		$this->port = $config['port'];
+		$this->username = $config['username'];
+		$this->password = $config['password'];
+		$this->vhost = $config['vhost'];
+		
+		if (isset($config["exchange_type"])) {
+			$this->exchange_type = $config["exchange_type"];
+		}
+		
+		$this->exchange = $exchange;
+		$this->queue = $queue;
+		
+	}
+	
+	public function consume_request($req)
+	{
+		$body = $req->body;
+		//$payload = json_decode($body, true); 
+		$response;
+		
+		if (isset($this->callback)) {
+			
+			$response = new AMQPMessage(
+				call_user_func($this->callback, $body), //Call the function callback, with parameter(s) in $payload
+				array('correlation_id' => $req->get('correlation_id')) //"return to sender using correlation_id"
+			);
+			
+		}
 
-    $msg = new AMQPMessage(
-        (string) fib($n),
-        array('correlation_id' => $req->get('correlation_id'))
-    );
+		$req->delivery_info['channel']->basic_publish(
+			$response,
+			'',
+			$req->get('reply_to')
+		);
+		$req->ack();
+		
+	}
+	
+	public function process_requests($callback)
+	{
 
-    $req->delivery_info['channel']->basic_publish(
-        $msg,
-        '',
-        $req->get('reply_to')
-    );
-    $req->ack();
-};
+		$this->connection = new AMQPStreamConnection($host, $port, $username, $password, $vhost);
+		$this->channel = $this->connection->channel();
 
-$channel->basic_qos(null, 1, null);
-$channel->basic_consume('rpc_queue', '', false, false, false, false, $callback);
+		$this->channel->queue_declare($this->queue, false, false, false, false);
 
-while ($channel->is_open()) {
-    $channel->wait();
+		$this->channel->basic_qos(null, 1, null);
+		$this->channel->basic_consume($this->queue, '', false, false, false, false, array($this, 'consume_request')); //This means that messages will be sent to function consume_request
+
+		while ($this->channel->is_open()) {
+			$this->channel->wait();
+		}
+
+		$this->channel->close();
+		$this->connection->close();
+	}
 }
 
-$channel->close();
-$connection->close();
+$testConsumer = new rabbitMQConsumer("amq.direct", "rpc_queue");
+$testConsumer->process_requests('fib');
+
 ?>
