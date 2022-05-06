@@ -1,234 +1,172 @@
 <?php
 
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
+require_once __DIR__ . '/vendor/autoload.php';
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
 
-class rabbitMQConsumer {
-  public $BROKER_HOST;
-  private $BROKER_PORT;
-  private $USER;
-  private $PASSWORD;
-  private $VHOST;
-  private $exchange;
-  private $queue;
-  private $routing_key = '*';
-  private $exchange_type = "topic";
 
-  function __construct($exchange, $queue) {
-    require_once __DIR__ . "/config.php"; //pull in our credentials
+class rabbitMQConsumer
+{
+	public $host;
+	private $port;
+	private $username;
+	private $password;
+	private $vhost;
+	private $exchange;
+	private $queue;
+	private $routing_key = '*';
+	private $exchange_type = "direct";
+	
+	//Initialize the consumer
+	public function __construct($exchange, $queue)
+	{
+		require_once __DIR__ . "/config.php"; //pull in our credentials
+		$this->host = $config['host'];
+		$this->port = $config['port'];
+		$this->username = $config['username'];
+		$this->password = $config['password'];
+		$this->vhost = $config['vhost'];
+		
+		if (isset($config["exchange_type"])) {
+			$this->exchange_type = $config["exchange_type"];
+		}
+		
+		$this->exchange = $exchange;
+		$this->queue = $queue;
+		
+	}
+	
+	public function consume_request($req)
+	{
+		$body = $req->body;
+		$payload = json_decode($body, true); 
+		$response;
+		
+		if (isset($this->callback)) {
+			
+			$response = new AMQPMessage(
+				call_user_func($this->callback, $payload), //Call the function callback, with parameter(s) in $payload
+				array('correlation_id' => $req->get('correlation_id')) //"return to sender using correlation_id"
+			);
+			
+		}
 
-    $this->BROKER_HOST = $config['host'];
-    $this->BROKER_PORT = $config['port'];
-    $this->USER = $config['username'];
-    $this->PASSWORD = $config['password'];
-    $this->VHOST = $config['vhost'];
-    if (isset($config["exchange_type"])) {
-      $this->exchange_type = $config["exchange_type"];
+		$req->delivery_info['channel']->basic_publish(
+			$response,
+			'',
+			$req->get('reply_to')
+		);
+		$req->ack();
+		
+	}
+	
+	public function process_requests($callback)
+	{
+		$this->callback = $callback;
+		$this->connection = new AMQPStreamConnection($this->host, $this->port, $this->username, $this->password, $this->vhost);
+		$this->channel = $this->connection->channel();
+
+		$this->channel->queue_declare($this->queue, false, false, false, false);
+
+		$this->channel->basic_qos(null, 1, null);
+		$this->channel->basic_consume($this->queue, '', false, false, false, false, array($this, 'consume_request')); //This means that messages will be sent to function consume_request
+
+		while ($this->channel->is_open()) {
+			$this->channel->wait();
+		}
+
+		$this->channel->close();
+		$this->connection->close();
+	}
+}
+//test code:
+//$testConsumer = new rabbitMQConsumer("amq.direct", "rpc_queue");
+//$testConsumer->process_requests('fib');
+
+class rabbitMQProducer
+{
+    public $host;
+    private $port;
+    private $username;
+    private $password;
+    private $vhost;
+    private $exchange;
+    private $queue;
+    private $routing_key = '*';
+    private $exchange_type = "direct";
+    private $connection;
+    private $channel;
+    private $callback_queue;
+    private $response;
+    private $corr_id;
+
+    public function __construct($exchange, $queue)
+    {
+      require_once __DIR__ . "/config.php"; //pull in our credentials
+      $this->host = $config['host'];
+      $this->port = $config['port'];
+      $this->username = $config['username'];
+      $this->password = $config['password'];
+      $this->vhost = $config['vhost'];
+      if (isset($config["exchange_type"])) {
+        $this->exchange_type = $config["exchange_type"];
+      }
+      
+      $this->exchange = $exchange;
+      $this->queue = $queue;
+      
+        $this->connection = new AMQPStreamConnection($this->host, $this->port, $this->username, $this->password, $this->vhost);
+        $this->channel = $this->connection->channel();
+        list($this->callback_queue, ,) = $this->channel->queue_declare(
+            "",
+            false,
+            false,
+            true,
+            false
+        );
+        $this->channel->basic_consume(
+            $this->callback_queue,
+            '',
+            false,
+            true,
+            false,
+            false,
+            array(
+                $this,
+                'onResponse'
+            )
+        );
     }
-    $this->exchange = $exchange;
-    $this->queue = $queue;
-  }
 
-  function process_message($msg) {
-    // send the ack to clear the item from the queue
-    if ($msg->getRoutingKey() !== "*") {
-      return;
-    }
-    $this->conn_queue->ack($msg->getDeliveryTag());
-    try {
-      if ($msg->getReplyTo()) {
-        // message wants a response
-        // process request
-        $body = $msg->getBody();
-        $payload = json_decode($body, true);
-        $response;
-        if (isset($this->callback)) {
-          $response = call_user_func($this->callback, $payload);
+    public function onResponse($rep)
+    {
+        if ($rep->get('correlation_id') == $this->corr_id) {
+            $this->response = $rep->body;
         }
-
-        $params = [];
-        $params['host'] = $this->BROKER_HOST;
-        $params['port'] = $this->BROKER_PORT;
-        $params['login'] = $this->USER;
-        $params['password'] = $this->PASSWORD;
-        $params['vhost'] = $this->VHOST;
-        $conn = new AMQPConnection($params);
-        $conn->connect();
-        $channel = new AMQPChannel($conn);
-        $exchange = new AMQPExchange($channel);
-        $exchange->setName($this->exchange);
-        $exchange->setType($this->exchange_type);
-
-        $conn_queue = new AMQPQueue($channel);
-        $conn_queue->setName($msg->getReplyTo());
-        $replykey = $this->routing_key . ".response";
-        $conn_queue->bind($exchange->getName(), $replykey);
-        $exchange->publish(json_encode($response), $replykey, AMQP_NOPARAM, ['correlation_id' => $msg->getCorrelationId()]);
-
-        return;
-      }
-    } catch (Exception $e) {
-      // ampq throws exception if get fails...
-      echo "error: rabbitMQServer: process_message: exception caught: " . $e;
     }
-    // message does not require a response, send ack immediately
-    $body = $msg->getBody();
-    $payload = json_decode($body, true);
-    if (isset($this->callback)) {
-      call_user_func($this->callback, $payload);
+
+    public function send_request($n)
+    {
+        $this->response = null;
+        $this->corr_id = uniqid();
+
+        $msg = new AMQPMessage(
+            (string) json_encode($n),
+            array(
+                'correlation_id' => $this->corr_id,
+                'reply_to' => $this->callback_queue
+            )
+        );
+        $this->channel->basic_publish($msg, '', $this->queue);
+        while (!$this->response) {
+            $this->channel->wait();
+        }
+        return json_decode($this->response, true);
     }
-    echo "processed one-way message\n";
-  }
-
-  function process_requests($callback) {
-    try {
-      $this->callback = $callback;
-      $params = [];
-      $params['host'] = $this->BROKER_HOST;
-      $params['port'] = $this->BROKER_PORT;
-      $params['login'] = $this->USER;
-      $params['password'] = $this->PASSWORD;
-      $params['vhost'] = $this->VHOST;
-      $conn = new AMQPConnection($params);
-      $conn->connect();
-
-      $channel = new AMQPChannel($conn);
-
-      $exchange = new AMQPExchange($channel);
-      $exchange->setName($this->exchange);
-      $exchange->setType($this->exchange_type);
-
-      $this->conn_queue = new AMQPQueue($channel);
-      $this->conn_queue->setName($this->queue);
-      $this->conn_queue->bind($exchange->getName(), $this->routing_key);
-
-      $this->conn_queue->consume([$this, 'process_message']);
-
-      // Loop as long as the channel has callbacks registered
-      while (count($channel->callbacks)) {
-        $channel->wait();
-      }
-    } catch (Exception $e) {
-      trigger_error("Failed to start request processor: " . $e, E_USER_ERROR);
-    }
-  }
 }
 
-class rabbitMQProducer {
-  public $BROKER_HOST;
-  private $BROKER_PORT;
-  private $USER;
-  private $PASSWORD;
-  private $VHOST;
-  private $exchange;
-  private $queue;
-  private $routing_key = '*';
-  private $response_queue = [];
-  private $exchange_type = "topic";
 
-  function __construct($exchange, $queue) {
-    require __DIR__ . "/config.php"; //pull in our credentials
-
-    $this->BROKER_HOST = $config['host'];
-    $this->BROKER_PORT = $config['port'];
-    $this->USER = $config['username'];
-    $this->PASSWORD = $config['password'];
-    $this->VHOST = $config['vhost'];
-    if (isset($config["exchange_type"])) {
-      $this->exchange_type = $config["exchange_type"];
-    }
-    $this->exchange = $exchange;
-    $this->queue = $queue;
-  }
-
-  function process_response($response) {
-    $uid = $response->getCorrelationId();
-    if (!isset($this->response_queue[$uid])) {
-      echo "unknown uid\n";
-      return true;
-    }
-    $this->conn_queue->ack($response->getDeliveryTag());
-    $body = $response->getBody();
-    $payload = json_decode($body, true);
-    if (!isset($payload)) {
-      $payload = "[empty response]";
-    }
-    $this->response_queue[$uid] = $payload;
-    return false;
-  }
-
-  function send_request($message) {
-    $uid = uniqid() . microtime(true);
-
-    $json_message = json_encode($message);
-    try {
-      $params = [];
-      $params['host'] = $this->BROKER_HOST;
-      $params['port'] = $this->BROKER_PORT;
-      $params['login'] = $this->USER;
-      $params['password'] = $this->PASSWORD;
-      $params['vhost'] = $this->VHOST;
-
-      $conn = new AMQPConnection($params);
-      $conn->connect();
-
-      $channel = new AMQPChannel($conn);
-
-      $exchange = new AMQPExchange($channel);
-      $exchange->setName($this->exchange);
-      $exchange->setType($this->exchange_type);
-
-      $callback_queue = new AMQPQueue($channel);
-      $callback_queue->setName($this->queue . "_response");
-      $callback_queue->declareQueue();
-      $callback_queue->bind($exchange->getName(), $this->routing_key . ".response");
-
-      $this->conn_queue = new AMQPQueue($channel);
-      $this->conn_queue->setName($this->queue);
-      $this->conn_queue->bind($exchange->getName(), $this->routing_key);
-
-      $exchange->publish($json_message, $this->routing_key, AMQP_NOPARAM, ['reply_to' => $callback_queue->getName(), 'correlation_id' => $uid]);
-      $this->response_queue[$uid] = "waiting";
-      try {
-        $callback_queue->consume([$this, 'process_response'], AMQP_NOWAIT);
-      } catch (Exception $e) {
-        unset($this->response_queue[$uid]);
-        $callback_queue->cancel($uid);
-        return [ 'error' => true, 'msg' => 'RMQ: Unable to consume response.' ];
-      }
-
-      $response = $this->response_queue[$uid];
-      unset($this->response_queue[$uid]);
-      return $response;
-    } catch (Exception $e) {
-      return [ 'error' => true, 'msg' => "Failed to send message to exchange: " . $e->getMessage() ];
-    }
-  }
-
-  function publish($message) {
-    $json_message = json_encode($message);
-    try {
-      $params = [];
-      $params['host'] = $this->BROKER_HOST;
-      $params['port'] = $this->BROKER_PORT;
-      $params['login'] = $this->USER;
-      $params['password'] = $this->PASSWORD;
-      $params['vhost'] = $this->VHOST;
-      $conn = new AMQPConnection($params);
-      $conn->connect();
-      $channel = new AMQPChannel($conn);
-      $exchange = new AMQPExchange($channel);
-      $exchange->setName($this->exchange);
-      $exchange->setType($this->exchange_type);
-      $this->conn_queue = new AMQPQueue($channel);
-      $this->conn_queue->setName($this->queue);
-      $this->conn_queue->bind($exchange->getName(), $this->routing_key);
-      return $exchange->publish($json_message, $this->routing_key);
-    } catch (Exception $e) {
-      die("failed to send message to exchange: " . $e->getMessage() . "\n");
-    }
-  }
-}
+//$client = new rabbitMQProducer('amq.direct', 'news');
+//$response = $client->send_request('Aman');
 
 ?>
