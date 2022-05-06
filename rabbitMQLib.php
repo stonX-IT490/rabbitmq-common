@@ -117,21 +117,10 @@ class rabbitMQProducer
       
         $this->connection = new AMQPStreamConnection($this->host, $this->port, $this->username, $this->password, $this->vhost);
         $this->channel = $this->connection->channel();
-        list($this->callback_queue, ,) = $this->channel->queue_declare(
-            "",
-            false,
-            false,
-            true,
-            false
-        );
+        list($this->callback_queue, ,) = $this->channel->queue_declare("",false,false,true,false);
         $this->channel->basic_consume(
             $this->callback_queue,
-            '',
-            false,
-            true,
-            false,
-            false,
-            array(
+            '',false,true,false,false,array(
                 $this,
                 'onResponse'
             )
