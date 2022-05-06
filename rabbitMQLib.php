@@ -158,8 +158,9 @@ class rabbitMQProducer
             )
         );
         $this->channel->basic_publish($msg, '', $this->queue);
+        $timeout = 30;
         while (!$this->response) {
-            $this->channel->wait();
+            $this->channel->wait(null, false, $timeout);
         }
         return json_decode($this->response, true);
     }
