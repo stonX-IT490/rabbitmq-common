@@ -45,7 +45,7 @@ class rabbitMQConsumer
 		if (isset($this->callback)) {
 			
 			$response = new AMQPMessage(
-				call_user_func($this->callback, $payload), //Call the function callback, with parameter(s) in $payload
+				json_encode( call_user_func($this->callback, $payload) ), //Call the function callback, with parameter(s) in $payload
 				array('correlation_id' => $req->get('correlation_id')) //"return to sender using correlation_id"
 			);
 			
