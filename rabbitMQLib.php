@@ -147,7 +147,7 @@ class rabbitMQProducer
             )
         );
         $this->channel->basic_publish($msg, '', $this->queue);
-        $timeout = 30;
+        $timeout = 10;
         while (!$this->response) {
             $this->channel->wait(null, false, $timeout);
         }
