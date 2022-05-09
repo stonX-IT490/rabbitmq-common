@@ -2,7 +2,7 @@
 
 $config = [];
 
-$config['host'] = "";
+$config['host'] = "broker";
 $config['port'] = 5672;
 $config['username'] = "";
 $config['password'] = "";
